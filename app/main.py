@@ -1,18 +1,19 @@
-# main.py
+# app/main.py
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import os, mimetypes, tempfile, requests
 from dotenv import load_dotenv
 
+# Load env (handy locally; on Render you set env vars in dashboard)
 load_dotenv(override=True)
 
 API_PREFIX = "/api/v1"
-TEAM_TOKEN = os.getenv("TEAM_TOKEN")
+TEAM_TOKEN = os.getenv("TEAM_TOKEN") or ""
 app = FastAPI(title="HackRx Query-Retrieval")
 
-# in app/main.py, after app = FastAPI(...)
+# Friendly root + health
 @app.get("/")
 def root():
     return {"ok": True, "service": "HackRx Query-Retrieval", "docs": "/docs"}
@@ -21,6 +22,7 @@ def root():
 def healthz():
     return {"ok": True}
 
+# Security (Bearer)
 security = HTTPBearer(auto_error=True)
 
 class RunReq(BaseModel):
@@ -30,19 +32,18 @@ class RunReq(BaseModel):
 class RunResp(BaseModel):
     answers: List[str]
 
-def _auth(bearer: str | None):
-    from fastapi import HTTPException
+def _auth(creds: Optional[HTTPAuthorizationCredentials]):
     if not TEAM_TOKEN:
         raise HTTPException(500, "TEAM_TOKEN not set")
-    if not bearer or not bearer.startswith("Bearer "):
+    if creds is None:
         raise HTTPException(401, "Missing bearer token")
+    if (creds.scheme or "").lower() != "bearer":
+        raise HTTPException(401, "Invalid auth scheme")
 
-    sent = bearer.split(" ", 1)[1].strip()
+    sent = (creds.credentials or "").strip()
     expected = TEAM_TOKEN.strip()
-
     if sent != expected:
         raise HTTPException(403, "Invalid token")
-
 
 from app.doc_parser import parse_document
 from app.pipeline import answer_questions
@@ -51,6 +52,7 @@ from app.pipeline import answer_questions
 def hackrx_run(req: RunReq, creds: HTTPAuthorizationCredentials = Depends(security)):
     _auth(creds)
 
+    # Download the document to a temp file with inferred suffix
     with requests.get(req.documents, stream=True, timeout=45) as r:
         r.raise_for_status()
         ctype = (r.headers.get("Content-Type") or "").split(";")[0]
@@ -63,6 +65,7 @@ def hackrx_run(req: RunReq, creds: HTTPAuthorizationCredentials = Depends(securi
                     tmp.write(chunk)
             path = tmp.name
 
-    text, meta = parse_document(path)
+    # Parse and answer
+    text, meta = parse_document(path)  # (full_text, meta)
     answers = answer_questions(text, req.questions, meta=meta)
     return RunResp(answers=answers)
