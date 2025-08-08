@@ -30,13 +30,19 @@ class RunReq(BaseModel):
 class RunResp(BaseModel):
     answers: List[str]
 
-def _auth(creds: HTTPAuthorizationCredentials):
+def _auth(bearer: str | None):
+    from fastapi import HTTPException
     if not TEAM_TOKEN:
         raise HTTPException(500, "TEAM_TOKEN not set")
-    if creds.scheme.lower() != "bearer":
-        raise HTTPException(401, "Invalid auth scheme")
-    if creds.credentials.strip() != TEAM_TOKEN:
+    if not bearer or not bearer.startswith("Bearer "):
+        raise HTTPException(401, "Missing bearer token")
+
+    sent = bearer.split(" ", 1)[1].strip()
+    expected = TEAM_TOKEN.strip()
+
+    if sent != expected:
         raise HTTPException(403, "Invalid token")
+
 
 from app.doc_parser import parse_document
 from app.pipeline import answer_questions
