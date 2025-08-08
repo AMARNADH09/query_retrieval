@@ -1,20 +1,34 @@
-from sentence_transformers import SentenceTransformer, util
+# app/embedder.py
+import os
 import torch
+from sentence_transformers import SentenceTransformer, util
 
-# Load a lightweight embedding model
-_model = SentenceTransformer("all-MiniLM-L6-v2")
+# Super important for 512MB instances
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("TORCH_NUM_THREADS", "1")
+
+_ST_MODEL = None
+
+def _get_model():
+    global _ST_MODEL
+    if _ST_MODEL is None:
+        # Use a very small model by default (fits in 512MB once loaded)
+        name = os.getenv("ST_MODEL_NAME", "sentence-transformers/paraphrase-MiniLM-L3-v2")
+        # Force CPU, don’t try to use CUDA
+        _ST_MODEL = SentenceTransformer(name, device="cpu")
+    return _ST_MODEL
 
 def embed_texts(texts):
-    """
-    Embed a list of text chunks into vectors.
-    """
-    return _model.encode(texts, convert_to_tensor=True)
+    model = _get_model()
+    with torch.no_grad():
+        return model.encode(texts, convert_to_tensor=True, normalize_embeddings=True)
 
 def semantic_search(query, chunks, chunk_embeddings, top_k=5):
-    """
-    Given a query, returns the top_k most similar chunks.
-    """
-    query_embedding = _model.encode(query, convert_to_tensor=True)
-    scores = util.cos_sim(query_embedding, chunk_embeddings)[0]
-    top_results = torch.topk(scores, k=top_k)
-    return [chunks[idx] for idx in top_results.indices]
+    model = _get_model()
+    with torch.no_grad():
+        q = model.encode(query, convert_to_tensor=True, normalize_embeddings=True)
+        scores = util.cos_sim(q, chunk_embeddings)[0]
+        top_k = min(top_k, len(chunks))
+        top = torch.topk(scores, k=top_k)
+        return [chunks[i] for i in top.indices]
