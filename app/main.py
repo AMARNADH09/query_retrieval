@@ -6,14 +6,15 @@ from typing import List, Optional
 import os, mimetypes, tempfile, requests
 from dotenv import load_dotenv
 
-# Load env (handy locally; on Render you set env vars in dashboard)
+# Load env for local dev; on Render you set env vars in the dashboard
 load_dotenv(override=True)
 
 API_PREFIX = "/api/v1"
-TEAM_TOKEN = os.getenv("TEAM_TOKEN") or ""
+TEAM_TOKEN = (os.getenv("TEAM_TOKEN") or "").strip()
+
 app = FastAPI(title="HackRx Query-Retrieval")
 
-# Friendly root + health
+# Friendly root + health (also keeps Render happy)
 @app.get("/")
 def root():
     return {"ok": True, "service": "HackRx Query-Retrieval", "docs": "/docs"}
@@ -22,7 +23,7 @@ def root():
 def healthz():
     return {"ok": True}
 
-# Security (Bearer)
+# Bearer auth
 security = HTTPBearer(auto_error=True)
 
 class RunReq(BaseModel):
@@ -33,26 +34,31 @@ class RunResp(BaseModel):
     answers: List[str]
 
 def _auth(creds: Optional[HTTPAuthorizationCredentials]):
+    """
+    Validate Bearer token using FastAPI's HTTPAuthorizationCredentials.
+    """
     if not TEAM_TOKEN:
-        raise HTTPException(500, "TEAM_TOKEN not set")
+        raise HTTPException(status_code=500, detail="TEAM_TOKEN not set")
     if creds is None:
-        raise HTTPException(401, "Missing bearer token")
+        raise HTTPException(status_code=401, detail="Missing bearer token")
     if (creds.scheme or "").lower() != "bearer":
-        raise HTTPException(401, "Invalid auth scheme")
+        raise HTTPException(status_code=401, detail="Invalid auth scheme")
 
     sent = (creds.credentials or "").strip()
-    expected = TEAM_TOKEN.strip()
-    if sent != expected:
-        raise HTTPException(403, "Invalid token")
+    expected = TEAM_TOKEN  # already stripped above
+
+    if not sent or sent != expected:
+        raise HTTPException(status_code=403, detail="Invalid token")
 
 from app.doc_parser import parse_document
 from app.pipeline import answer_questions
 
 @app.post(f"{API_PREFIX}/hackrx/run", response_model=RunResp)
 def hackrx_run(req: RunReq, creds: HTTPAuthorizationCredentials = Depends(security)):
+    # Auth
     _auth(creds)
 
-    # Download the document to a temp file with inferred suffix
+    # Download doc to temp file with inferred suffix
     with requests.get(req.documents, stream=True, timeout=45) as r:
         r.raise_for_status()
         ctype = (r.headers.get("Content-Type") or "").split(";")[0]
@@ -65,7 +71,7 @@ def hackrx_run(req: RunReq, creds: HTTPAuthorizationCredentials = Depends(securi
                     tmp.write(chunk)
             path = tmp.name
 
-    # Parse and answer
-    text, meta = parse_document(path)  # (full_text, meta)
+    # Parse + answer
+    text, meta = parse_document(path)  # returns (full_text, meta)
     answers = answer_questions(text, req.questions, meta=meta)
     return RunResp(answers=answers)
