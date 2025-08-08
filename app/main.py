@@ -12,6 +12,15 @@ API_PREFIX = "/api/v1"
 TEAM_TOKEN = os.getenv("TEAM_TOKEN")
 app = FastAPI(title="HackRx Query-Retrieval")
 
+# in app/main.py, after app = FastAPI(...)
+@app.get("/")
+def root():
+    return {"ok": True, "service": "HackRx Query-Retrieval", "docs": "/docs"}
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
 security = HTTPBearer(auto_error=True)
 
 class RunReq(BaseModel):
